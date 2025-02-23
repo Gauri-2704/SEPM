@@ -1,0 +1,1137 @@
+import os
+import cv2
+import numpy as np
+
+# --- Preprocessing Functions ---
+
+def resize_and_pad(img, size=(256, 256)):
+    """Resizes image while maintaining aspect ratio and padding if necessary."""
+    h, w = img.shape[:2]
+    scale = min(size[0] / w, size[1] / h)  # Maintain aspect ratio
+    nw, nh = int(w * scale), int(h * scale)  # New width and height
+
+    img_resized = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
+
+    # Create a new blank (white) image
+    padded_img = np.ones((size[1], size[0]), dtype=np.uint8) * 255
+    x_offset = (size[0] - nw) // 2
+    y_offset = (size[1] - nh) // 2
+    padded_img[y_offset:y_offset+nh, x_offset:x_offset+nw] = img_resized
+
+    return padded_img
+
+def remove_noise(img):
+    """Applies Gaussian and Median Blur to reduce noise while preserving edges."""
+    img = cv2.GaussianBlur(img, (5, 5), 0)
+    img = cv2.medianBlur(img, 3)  # Median filter helps in preserving edges
+    return img
+
+def binarize_image(img):
+    """Applies adaptive thresholding for better contrast."""
+    return cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                 cv2.THRESH_BINARY, 11, 2)
+
+def segment_image(img):
+    """Segments the fingerprint region by detecting the largest contour."""
+    _, binary = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY_INV)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if not contours:
+        print("Warning: No contours found, returning original image")
+        return img  # Return original image if segmentation fails
+
+    x, y, w, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
+    return img[y:y+h, x:x+w]
+
+def apply_canny_edge_detection(img):
+    """Applies Canny edge detection to highlight fingerprint ridges."""
+    edges = cv2.Canny(img, 50, 150)
+    return edges
+
+def normalize_image(img):
+    """Normalizes image brightness and contrast for consistency."""
+    return cv2.equalizeHist(img)
+
+def preprocess_image(image_path, output_path, size=(256, 256)):
+    """Loads an image, applies preprocessing steps, and saves the processed image."""
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)  # Read as grayscale
+    
+    if img is None:
+        print(f"Warning: Could not read {image_path}, skipping...")
+        return
+    
+    img = remove_noise(img)
+    img = binarize_image(img)
+    img = segment_image(img)  # Crop to fingerprint area
+    img = resize_and_pad(img, size)  # Resize with padding
+    img = apply_canny_edge_detection(img)  # Apply edge detection
+    img = normalize_image(img)  # Normalize contrast
+
+    cv2.imwrite(output_path, img)
+
+# Function to process all images in the dataset
+def preprocess_dataset(input_dir, output_dir):
+    """Processes all images in a dataset directory and saves them in an output directory."""
+    os.makedirs(output_dir, exist_ok=True)  # Ensure the output directory exists
+    
+    for blood_group in os.listdir(input_dir):
+        group_folder = os.path.join(input_dir, blood_group)
+
+        if not os.path.isdir(group_folder):  # Skip non-folder files
+            continue
+
+        # Handle special characters in blood group folder names
+        sanitized_folder_name = blood_group.replace('+', '_pos').replace('-', '_neg')
+        output_folder = os.path.join(output_dir, sanitized_folder_name)
+        
+        os.makedirs(output_folder, exist_ok=True)  # Create folder for processed images
+
+        for image_file in os.listdir(group_folder):
+            input_path = os.path.join(group_folder, image_file)
+            output_path = os.path.join(output_folder, image_file)
+
+            print(f"Processing: {input_path} → {output_path}")  # Debugging statement
+            preprocess_image(input_path, output_path)
+
+# Example usage:
+if __name__ == "__main__":
+    input_directory = 'dataset'  # Path to your dataset folder
+    output_directory = 'processed_dataset'  # Path to save preprocessed images
+
+    preprocess_dataset(input_directory, output_directory)
+    print("✅ Preprocessing complete!")
+
+
+
+
+
+
+
+
+
+eda curr
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pickle
+import json
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+import joblib
+
+# Load the cleaned features
+with open('cleaned_fingerprint_features.pkl', 'rb') as f:
+    cleaned_features = pickle.load(f)
+
+# Convert to a DataFrame for analysis
+data = pd.DataFrame(cleaned_features)
+
+# Check for missing values
+print("Missing values in each column:")
+print(data.isnull().sum())
+
+# Fill missing values for numeric columns only
+numeric_columns = data.select_dtypes(include=[np.number]).columns
+data[numeric_columns] = data[numeric_columns].fillna(data[numeric_columns].mean())
+
+# Handle non-numeric columns like 'label' separately if necessary
+categorical_columns = data.select_dtypes(exclude=[np.number]).columns
+for col in categorical_columns:
+    data[col].fillna(data[col].mode()[0], inplace=True)
+
+# Overview of the dataset
+print(data.info())
+print(data.describe())
+
+# Ensure the 'label' column exists
+if 'label' not in data.columns:
+    raise ValueError("The 'label' column is missing in the dataset.")
+
+# Class distribution
+plt.figure(figsize=(6, 4))
+sns.countplot(x='label', data=data)
+plt.title('Class Distribution')
+plt.show()
+
+# Encode the 'label' column
+label_encoder = LabelEncoder()
+data['label_encoded'] = label_encoder.fit_transform(data['label'])
+
+# Correlation analysis
+numeric_data = data.select_dtypes(include=[np.number])
+correlation_matrix = numeric_data.corr()
+
+plt.figure(figsize=(10, 8))
+sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt=".2f")
+plt.title('Feature Correlation Matrix')
+plt.show()
+
+# Handle 'lbp' feature correctly
+lbp_columns = [col for col in data.columns if 'lbp' in col.lower()]
+if lbp_columns:
+    selected_lbp_column = lbp_columns[0]  # Choose the first LBP-related column
+    plt.figure(figsize=(8, 6))
+    sns.histplot(data[selected_lbp_column].fillna(0), kde=True, bins=30)
+    plt.title(f'Distribution of {selected_lbp_column}')
+    plt.show()
+else:
+    print("Warning: No LBP column found in the dataset.")
+
+# Boxplot of 'minutiae_count' per Blood Group
+if 'minutiae_count' in data.columns:
+    plt.figure(figsize=(8, 6))
+    sns.boxplot(x='label', y='minutiae_count', data=data)
+    plt.title("Box Plot of Minutiae Count by Blood Group")
+    plt.xlabel("Blood Group")
+    plt.ylabel("Minutiae Count")
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+else:
+    print("Warning: 'minutiae_count' column not found in the dataset.")
+
+# Standardize the features for PCA (excluding non-numeric columns)
+drop_columns = ['label', 'label_encoded']
+X = data.drop(columns=[col for col in drop_columns if col in data.columns], errors='ignore')
+
+# Ensure all features are numeric before scaling
+X = X.select_dtypes(include=[np.number])
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# PCA Transformation (reduce to 2 components)
+pca = PCA(n_components=2)
+X_pca = pca.fit_transform(X_scaled)
+
+# Target variable
+y = data['label_encoded']
+
+# Train a RandomForest classifier on PCA-reduced data
+clf = RandomForestClassifier(random_state=42)
+clf.fit(X_pca, y)
+
+# Predicting on the same dataset for evaluation
+y_pred = clf.predict(X_pca)
+
+# Evaluate accuracy
+accuracy = accuracy_score(y, y_pred)
+print(f"Model Accuracy: {accuracy:.2f}")
+
+# Save the trained model
+joblib.dump(clf, 'random_forest_model.pkl')
+
+# Save the processed dataset
+data.to_csv('final_processed_data.csv', index=False)
+
+print("Processing and model training completed successfully.")
+
+
+
+
+
+
+
+
+
+feature curr
+
+
+import os
+import cv2
+import numpy as np
+import pickle
+import pandas as pd
+from skimage.feature import local_binary_pattern
+from sklearn.preprocessing import MinMaxScaler
+
+# Ensure OpenCV contrib package is installed
+try:
+    from cv2.ximgproc import thinning
+except ImportError:
+    raise ImportError("Please install 'opencv-contrib-python' using: pip install opencv-contrib-python")
+
+# --- Feature Extraction Functions ---
+
+# Function to compute orientation map
+def compute_orientation(image):
+    sobel_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=5)
+    sobel_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=5)
+    orientation = np.arctan2(sobel_y, sobel_x)
+    return orientation
+
+# Function to detect minutiae points using Crossing Number Method
+def detect_minutiae(image):
+    skeleton = thinning(image)  # Skeletonize the image
+    minutiae_points = []
+
+    for y in range(1, skeleton.shape[0] - 1):
+        for x in range(1, skeleton.shape[1] - 1):
+            if skeleton[y, x] == 255:
+                neighbors = skeleton[y-1:y+2, x-1:x+2].flatten()
+                transitions = sum((neighbors[i] == 0 and neighbors[i+1] == 255) for i in range(8))
+
+                # Ridge ending if transitions == 1, bifurcation if transitions == 3
+                if transitions == 1 or transitions == 3:
+                    minutiae_points.append((x, y))
+    
+    return minutiae_points
+
+# Function to compute Local Binary Pattern (LBP)
+def compute_lbp(image, radius=1, n_points=8):
+    return local_binary_pattern(image, n_points, radius, method="uniform")
+
+# Function to extract features from a fingerprint image
+def extract_features(image_path):
+    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise ValueError(f"Could not read image at path: {image_path}")
+
+    # Apply Gaussian Blur to reduce noise
+    image = cv2.GaussianBlur(image, (5, 5), 0)
+    image_uint8 = image.astype('uint8')
+
+    # Compute fingerprint features
+    orientation_map = compute_orientation(image_uint8)
+    minutiae = detect_minutiae(image_uint8)
+    lbp = compute_lbp(image_uint8)
+
+    # Create a feature dictionary
+    features = {
+        "orientation_mean": np.mean(orientation_map),
+        "orientation_var": np.var(orientation_map),
+        "orientation_max": np.max(orientation_map),
+        "minutiae_count": len(minutiae),  # Minutiae count as a feature
+        "lbp_mean": np.mean(lbp),
+        "lbp_var": np.var(lbp),
+        "lbp_max": np.max(lbp)
+    }
+    return features
+
+# Function to process the dataset directory and extract features
+def process_dataset(input_dir, output_pkl, output_csv):
+    features_list = []
+    
+    for blood_group in os.listdir(input_dir):
+        folder = os.path.join(input_dir, blood_group)
+        if not os.path.isdir(folder):
+            continue  # Skip non-directory files
+
+        for image_file in os.listdir(folder):
+            image_path = os.path.join(folder, image_file)
+            try:
+                features = extract_features(image_path)
+                features['label'] = blood_group  # Store blood group label
+                features_list.append(features)
+            except Exception as e:
+                print(f"Error processing {image_path}: {e}")
+
+    # Convert to DataFrame for better analysis
+    df = pd.DataFrame(features_list)
+
+    # Normalize features using MinMaxScaler
+    scaler = MinMaxScaler()
+    feature_cols = ["orientation_mean", "orientation_var", "orientation_max",
+                    "minutiae_count", "lbp_mean", "lbp_var", "lbp_max"]
+    
+    df[feature_cols] = scaler.fit_transform(df[feature_cols])
+
+    # Save extracted features using pickle
+    with open(output_pkl, 'wb') as f:
+        pickle.dump(df, f)
+    
+    # Save features as CSV for easy visualization
+    df.to_csv(output_csv, index=False)
+
+    print(f"Feature extraction completed! \nPickle saved at: {output_pkl} \nCSV saved at: {output_csv}")
+
+# Example usage:
+if __name__ == "__main__":
+    input_directory = 'processed_dataset'  # Path to the preprocessed dataset folder
+    output_features_pkl = 'fingerprint_features.pkl'  # Output file to save features in pickle
+    output_features_csv = 'fingerprint_features.csv'  # Output file to save features in CSV
+
+    process_dataset(input_directory, output_features_pkl, output_features_csv)
+
+
+
+
+
+
+
+
+
+
+
+clean data
+import pandas as pd
+import numpy as np
+import pickle
+from sklearn.preprocessing import StandardScaler
+
+# Function to load extracted features
+def load_features(file_path):
+    try:
+        with open(file_path, 'rb') as f:
+            data = pickle.load(f)
+        print(f"Loaded data from '{file_path}' successfully.")
+        return pd.DataFrame(data)
+    except FileNotFoundError:
+        print(f"Error: The file '{file_path}' was not found.")
+        exit()
+    except Exception as e:
+        raise ValueError(f"Error loading feature file: {e}")
+
+# Function to extract meaningful numeric features
+def extract_features(df):
+    # Identify and process columns containing lists/arrays
+    for col in df.columns:
+        if df[col].apply(lambda x: isinstance(x, (np.ndarray, list))).any():
+            df[col] = df[col].apply(lambda x: tuple(x) if isinstance(x, (np.ndarray, list)) else x)
+
+    # Extract statistical measures from tuple-based columns
+    columns_to_process = ['orientation_map', 'minutiae', 'lbp']
+    for col in columns_to_process:
+        if col in df.columns and df[col].apply(lambda x: isinstance(x, tuple)).any():
+            print(f"Processing column: {col}")
+            df[f"{col}_mean"] = df[col].apply(lambda x: np.mean(x) if isinstance(x, tuple) and len(x) > 0 else 0)
+            df[f"{col}_var"] = df[col].apply(lambda x: np.var(x) if isinstance(x, tuple) and len(x) > 0 else 0)
+            df[f"{col}_max"] = df[col].apply(lambda x: np.max(x) if isinstance(x, tuple) and len(x) > 0 else 0)
+
+    # Drop original columns after extracting meaningful values
+    df.drop(columns=[col for col in columns_to_process if col in df.columns], inplace=True)
+    return df
+
+# Function to clean dataset
+def clean_data(input_file, output_pkl):
+    df = load_features(input_file)
+
+    # Display initial dataset info
+    print(df.info())
+
+    # Extract and process numerical features
+    df = extract_features(df)
+
+    # Remove duplicates
+    df_cleaned = df.drop_duplicates().copy()
+
+    # Handle missing values (using median)
+    if df_cleaned.isnull().any().any():
+        print("Handling missing values using median...")
+        df_cleaned.fillna(df_cleaned.median(), inplace=True)
+
+    # Normalize selected numeric features (optional)
+    scaler = StandardScaler()
+    scaled_columns = ['orientation_map_mean', 'minutiae_mean', 'lbp_mean']
+    for col in scaled_columns:
+        if col in df_cleaned.columns:
+            df_cleaned[f"{col}_scaled"] = scaler.fit_transform(df_cleaned[[col]])
+
+    # Save cleaned dataset to Pickle
+    try:
+        with open(output_pkl, 'wb') as f:
+            pickle.dump(df_cleaned.to_dict(orient="records"), f)
+        print(f"Fingerprint data cleaning completed and saved to '{output_pkl}'.")
+    except Exception as e:
+        print(f"Error saving cleaned data: {e}")
+
+    # Print summary of cleaned data
+    print("\nCleaned Data Summary:")
+    print(df_cleaned.head())
+    print(f"Total Records after cleaning: {len(df_cleaned)}")
+
+# Run cleaning process
+if __name__ == "__main__":
+    input_file = 'fingerprint_features.pkl'
+    output_pkl = 'cleaned_fingerprint_features.pkl'
+    
+    clean_data(input_file, output_pkl)
+
+
+
+eda old
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pickle
+import json
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+import joblib
+
+# Load the cleaned features
+with open('cleaned_fingerprint_features.pkl', 'rb') as f:
+    cleaned_features = pickle.load(f)
+
+# Convert to a DataFrame for analysis
+data = pd.DataFrame(cleaned_features)
+
+# Check for missing values
+print("Missing values in each column:")
+print(data.isnull().sum())
+
+# Overview of the dataset
+print(data.info())
+print(data.describe())
+
+# Ensure the 'label' column exists
+if 'label' not in data.columns:
+    raise ValueError("The 'label' column is missing in the dataset.")
+
+# Class distribution
+plt.figure(figsize=(6, 4))
+sns.countplot(x='label', data=data)
+plt.title('Class Distribution')
+plt.show()
+
+# Encode the 'label' column
+label_encoder = LabelEncoder()
+data['label_encoded'] = label_encoder.fit_transform(data['label'])
+
+# Correlation analysis
+numeric_data = data.select_dtypes(include=[np.number])
+correlation_matrix = numeric_data.corr()
+
+plt.figure(figsize=(10, 8))
+sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt=".2f")
+plt.title('Feature Correlation Matrix')
+plt.show()
+
+# Handle 'lbp' feature correctly
+lbp_columns = [col for col in data.columns if 'lbp' in col.lower()]
+if lbp_columns:
+    selected_lbp_column = lbp_columns[0]  # Choose the first LBP-related column
+    plt.figure(figsize=(8, 6))
+    sns.histplot(data[selected_lbp_column].fillna(0), kde=True, bins=30)
+    plt.title(f'Distribution of {selected_lbp_column}')
+    plt.show()
+else:
+    print("Warning: No LBP column found in the dataset.")
+
+# Boxplot of 'minutiae_count' per Blood Group
+if 'minutiae_count' in data.columns:
+    plt.figure(figsize=(8, 6))
+    sns.boxplot(x='label', y='minutiae_count', data=data)
+    plt.title("Box Plot of Minutiae Count by Blood Group")
+    plt.xlabel("Blood Group")
+    plt.ylabel("Minutiae Count")
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+else:
+    print("Warning: 'minutiae_count' column not found in the dataset.")
+
+# Standardize the features for PCA (excluding non-numeric columns)
+drop_columns = ['label', 'label_encoded']
+X = data.drop(columns=[col for col in drop_columns if col in data.columns], errors='ignore')
+
+# Ensure all features are numeric before scaling
+X = X.select_dtypes(include=[np.number])
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# PCA Transformation (reduce to 2 components)
+pca = PCA(n_components=2)
+X_pca = pca.fit_transform(X_scaled)
+
+# Target variable
+y = data['label_encoded']
+
+# Train a RandomForest classifier on PCA-reduced data
+clf = RandomForestClassifier(random_state=42)
+clf.fit(X_pca, y)
+
+# Predicting on the same dataset for evaluation
+y_pred = clf.predict(X_pca)
+
+# Evaluate accuracy
+accuracy = accuracy_score(y, y_pred)
+print(f"Model Accuracy: {accuracy:.2f}")
+
+# Save the trained model
+joblib.dump(clf, 'random_forest_model.pkl')
+
+# Save the processed dataset
+data.to_csv('final_processed_data.csv', index=False)
+
+print("Processing and model training completed successfully.")
+
+
+
+clean curr
+import pandas as pd
+import numpy as np
+import pickle
+from sklearn.preprocessing import StandardScaler
+
+# Function to load extracted features
+def load_features(file_path):
+    try:
+        with open(file_path, 'rb') as f:
+            data = pickle.load(f)
+        print(f"Loaded data from '{file_path}' successfully.")
+        return pd.DataFrame(data)
+    except FileNotFoundError:
+        print(f"Error: The file '{file_path}' was not found.")
+        exit()
+    except Exception as e:
+        raise ValueError(f"Error loading feature file: {e}")
+
+# Function to extract meaningful numeric features
+def extract_features(df):
+    # Identify and process columns containing lists/arrays
+    for col in df.columns:
+        if df[col].apply(lambda x: isinstance(x, (np.ndarray, list))).any():
+            df[col] = df[col].apply(lambda x: tuple(x) if isinstance(x, (np.ndarray, list)) else x)
+
+    # Extract statistical measures from tuple-based columns
+    columns_to_process = ['orientation_map', 'minutiae', 'lbp']
+    for col in columns_to_process:
+        if col in df.columns and df[col].apply(lambda x: isinstance(x, tuple)).any():
+            print(f"Processing column: {col}")
+            df[f"{col}_mean"] = df[col].apply(lambda x: np.mean(x) if isinstance(x, tuple) and len(x) > 0 else 0)
+            df[f"{col}_var"] = df[col].apply(lambda x: np.var(x) if isinstance(x, tuple) and len(x) > 0 else 0)
+            df[f"{col}_max"] = df[col].apply(lambda x: np.max(x) if isinstance(x, tuple) and len(x) > 0 else 0)
+
+    # Drop original columns after extracting meaningful values
+    df.drop(columns=[col for col in columns_to_process if col in df.columns], inplace=True)
+    return df
+
+# Function to clean dataset
+def clean_data(input_file, output_csv, output_pkl):
+    df = load_features(input_file)
+
+    # Display initial dataset info
+    print(df.info())
+
+    # Extract and process numerical features
+    df = extract_features(df)
+
+    # Remove duplicates
+    df_cleaned = df.drop_duplicates().copy()
+
+    # Handle missing values (using median)
+    if df_cleaned.isnull().any().any():
+        print("Handling missing values using median...")
+        df_cleaned.fillna(df_cleaned.median(), inplace=True)
+
+    # Normalize selected numeric features (optional)
+    scaler = StandardScaler()
+    scaled_columns = ['orientation_map_mean', 'minutiae_mean', 'lbp_mean']
+    for col in scaled_columns:
+        if col in df_cleaned.columns:
+            df_cleaned[f"{col}_scaled"] = scaler.fit_transform(df_cleaned[[col]])
+
+    # Save cleaned dataset to CSV
+    df_cleaned.to_csv(output_csv, index=False)
+    print(f"Cleaned dataset saved to '{output_csv}'.")
+
+    # Save cleaned dataset to Pickle
+    try:
+        with open(output_pkl, 'wb') as f:
+            pickle.dump(df_cleaned.to_dict(orient="records"), f)
+        print(f"Fingerprint data cleaning completed and saved to '{output_pkl}'.")
+    except Exception as e:
+        print(f"Error saving cleaned data: {e}")
+
+    # Print summary of cleaned data
+    print("\nCleaned Data Summary:")
+    print(df_cleaned.head())
+    print(f"Total Records after cleaning: {len(df_cleaned)}")
+
+# Run cleaning process
+if __name__ == "__main__":
+    input_file = 'fingerprint_features.pkl'
+    output_csv = 'cleaned_fingerprint_data.csv'
+    output_pkl = 'cleaned_fingerprint_features.pkl'
+    
+    clean_data(input_file, output_csv, output_pkl)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+feature extra curr
+import os
+import cv2
+import numpy as np
+import pickle
+import pandas as pd
+from skimage.feature import local_binary_pattern
+from sklearn.preprocessing import MinMaxScaler
+
+# Ensure OpenCV contrib package is installed
+try:
+    from cv2.ximgproc import thinning
+except ImportError:
+    raise ImportError("Please install 'opencv-contrib-python' using: pip install opencv-contrib-python")
+
+# --- Feature Extraction Functions ---
+
+# Function to compute orientation map
+def compute_orientation(image):
+    sobel_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=5)
+    sobel_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=5)
+    orientation = np.arctan2(sobel_y, sobel_x)
+    return orientation
+
+# Function to detect minutiae points using Crossing Number Method
+def detect_minutiae(image):
+    skeleton = thinning(image)  # Skeletonize the image
+    minutiae_points = []
+
+    for y in range(1, skeleton.shape[0] - 1):
+        for x in range(1, skeleton.shape[1] - 1):
+            if skeleton[y, x] == 255:
+                neighbors = skeleton[y-1:y+2, x-1:x+2].flatten()
+                transitions = sum((neighbors[i] == 0 and neighbors[i+1] == 255) for i in range(8))
+
+                # Ridge ending if transitions == 1, bifurcation if transitions == 3
+                if transitions == 1 or transitions == 3:
+                    minutiae_points.append((x, y))
+    
+    return minutiae_points
+
+# Function to compute Local Binary Pattern (LBP)
+def compute_lbp(image, radius=1, n_points=8):
+    return local_binary_pattern(image, n_points, radius, method="uniform")
+
+# Function to extract features from a fingerprint image
+def extract_features(image_path):
+    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise ValueError(f"Could not read image at path: {image_path}")
+
+    # Apply Gaussian Blur to reduce noise
+    image = cv2.GaussianBlur(image, (5, 5), 0)
+    image_uint8 = image.astype('uint8')
+
+    # Compute fingerprint features
+    orientation_map = compute_orientation(image_uint8)
+    minutiae = detect_minutiae(image_uint8)
+    lbp = compute_lbp(image_uint8)
+
+    # Create a feature dictionary
+    features = {
+        "orientation_mean": np.mean(orientation_map),
+        "orientation_var": np.var(orientation_map),
+        "orientation_max": np.max(orientation_map),
+        "minutiae_count": len(minutiae),  # Minutiae count as a feature
+        "lbp_mean": np.mean(lbp),
+        "lbp_var": np.var(lbp),
+        "lbp_max": np.max(lbp)
+    }
+    return features
+
+# Function to process the dataset directory and extract features
+def process_dataset(input_dir, output_pkl, output_csv):
+    features_list = []
+    
+    for blood_group in os.listdir(input_dir):
+        folder = os.path.join(input_dir, blood_group)
+        if not os.path.isdir(folder):
+            continue  # Skip non-directory files
+
+        for image_file in os.listdir(folder):
+            image_path = os.path.join(folder, image_file)
+            try:
+                features = extract_features(image_path)
+                features['label'] = blood_group  # Store blood group label
+                features_list.append(features)
+            except Exception as e:
+                print(f"Error processing {image_path}: {e}")
+
+    # Convert to DataFrame for better analysis
+    df = pd.DataFrame(features_list)
+
+    # Normalize features using MinMaxScaler
+    scaler = MinMaxScaler()
+    feature_cols = ["orientation_mean", "orientation_var", "orientation_max",
+                    "minutiae_count", "lbp_mean", "lbp_var", "lbp_max"]
+    
+    df[feature_cols] = scaler.fit_transform(df[feature_cols])
+
+    # Save extracted features using pickle
+    with open(output_pkl, 'wb') as f:
+        pickle.dump(df, f)
+    
+    # Save features as CSV for easy visualization
+    df.to_csv(output_csv, index=False)
+
+    print(f"Feature extraction completed! \nPickle saved at: {output_pkl} \nCSV saved at: {output_csv}")
+
+# Example usage:
+if __name__ == "__main__":
+    input_directory = 'processed_dataset'  # Path to the preprocessed dataset folder
+    output_features_pkl = 'fingerprint_features.pkl'  # Output file to save features in pickle
+    output_features_csv = 'fingerprint_features.csv'  # Output file to save features in CSV
+
+    process_dataset(input_directory, output_features_pkl, output_features_csv)
+
+clean data curr
+
+
+
+
+
+import pandas as pd
+import numpy as np
+import pickle
+from sklearn.preprocessing import StandardScaler
+
+# Function to load extracted features
+def load_features(file_path):
+    try:
+        with open(file_path, 'rb') as f:
+            data = pickle.load(f)
+        print(f"Loaded data from '{file_path}' successfully.")
+        return pd.DataFrame(data)
+    except FileNotFoundError:
+        print(f"Error: The file '{file_path}' was not found.")
+        exit()
+    except Exception as e:
+        raise ValueError(f"Error loading feature file: {e}")
+
+# Function to extract meaningful numeric features
+def extract_features(df):
+    # Identify and process columns containing lists/arrays
+    for col in df.columns:
+        if df[col].apply(lambda x: isinstance(x, (np.ndarray, list))).any():
+            df[col] = df[col].apply(lambda x: tuple(x) if isinstance(x, (np.ndarray, list)) else x)
+
+    # Extract statistical measures from tuple-based columns
+    columns_to_process = ['orientation_map', 'minutiae', 'lbp']
+    for col in columns_to_process:
+        if col in df.columns and df[col].apply(lambda x: isinstance(x, tuple)).any():
+            print(f"Processing column: {col}")
+            df[f"{col}_mean"] = df[col].apply(lambda x: np.mean(x) if isinstance(x, tuple) and len(x) > 0 else 0)
+            df[f"{col}_var"] = df[col].apply(lambda x: np.var(x) if isinstance(x, tuple) and len(x) > 0 else 0)
+            df[f"{col}_max"] = df[col].apply(lambda x: np.max(x) if isinstance(x, tuple) and len(x) > 0 else 0)
+
+    # Drop original columns after extracting meaningful values
+    df.drop(columns=[col for col in columns_to_process if col in df.columns], inplace=True)
+    return df
+
+# Function to clean dataset
+def clean_data(input_file, output_pkl):
+    df = load_features(input_file)
+
+    # Display initial dataset info
+    print(df.info())
+
+    # Extract and process numerical features
+    df = extract_features(df)
+
+    # Remove duplicates
+    df_cleaned = df.drop_duplicates().copy()
+
+    # Handle missing values (using median)
+    if df_cleaned.isnull().any().any():
+        print("Handling missing values using median...")
+        df_cleaned.fillna(df_cleaned.median(), inplace=True)
+
+    # Normalize selected numeric features (optional)
+    scaler = StandardScaler()
+    scaled_columns = ['orientation_map_mean', 'minutiae_mean', 'lbp_mean']
+    for col in scaled_columns:
+        if col in df_cleaned.columns:
+            df_cleaned[f"{col}_scaled"] = scaler.fit_transform(df_cleaned[[col]])
+
+    # Save cleaned dataset to Pickle
+    try:
+        with open(output_pkl, 'wb') as f:
+            pickle.dump(df_cleaned.to_dict(orient="records"), f)
+        print(f"Fingerprint data cleaning completed and saved to '{output_pkl}'.")
+    except Exception as e:
+        print(f"Error saving cleaned data: {e}")
+
+    # Print summary of cleaned data
+    print("\nCleaned Data Summary:")
+    print(df_cleaned.head())
+    print(f"Total Records after cleaning: {len(df_cleaned)}")
+
+# Run cleaning process
+if __name__ == "__main__":
+    input_file = 'fingerprint_features.pkl'
+    output_pkl = 'cleaned_fingerprint_features.pkl'
+    
+    clean_data(input_file, output_pkl)
+
+
+
+
+
+
+
+eda now 9-2
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pickle
+import json
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+import joblib
+
+# Load the cleaned features
+with open('cleaned_fingerprint_features.pkl', 'rb') as f:
+    cleaned_features = pickle.load(f)
+
+# Convert to a DataFrame for analysis
+data = pd.DataFrame(cleaned_features)
+
+# Check for missing values
+print("Missing values in each column:")
+print(data.isnull().sum())
+
+# Fill missing values for numeric columns only
+numeric_columns = data.select_dtypes(include=[np.number]).columns
+data[numeric_columns] = data[numeric_columns].fillna(data[numeric_columns].mean())
+
+# Handle non-numeric columns like 'label' separately if necessary
+categorical_columns = data.select_dtypes(exclude=[np.number]).columns
+for col in categorical_columns:
+    data[col].fillna(data[col].mode()[0], inplace=True)
+
+# Overview of the dataset
+print(data.info())
+print(data.describe())
+
+# Ensure the 'label' column exists
+if 'label' not in data.columns:
+    raise ValueError("The 'label' column is missing in the dataset.")
+
+# Class distribution
+plt.figure(figsize=(6, 4))
+sns.countplot(x='label', data=data)
+plt.title('Class Distribution')
+plt.show()
+
+# Encode the 'label' column
+label_encoder = LabelEncoder()
+data['label_encoded'] = label_encoder.fit_transform(data['label'])
+
+# Correlation analysis
+numeric_data = data.select_dtypes(include=[np.number])
+correlation_matrix = numeric_data.corr()
+
+plt.figure(figsize=(10, 8))
+sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt=".2f")
+plt.title('Feature Correlation Matrix')
+plt.show()
+
+# Handle 'lbp' feature correctly
+lbp_columns = [col for col in data.columns if 'lbp' in col.lower()]
+if lbp_columns:
+    selected_lbp_column = lbp_columns[0]  # Choose the first LBP-related column
+    plt.figure(figsize=(8, 6))
+    sns.histplot(data[selected_lbp_column].fillna(0), kde=True, bins=30)
+    plt.title(f'Distribution of {selected_lbp_column}')
+    plt.show()
+else:
+    print("Warning: No LBP column found in the dataset.")
+
+# Boxplot of 'minutiae_count' per Blood Group
+if 'minutiae_count' in data.columns:
+    plt.figure(figsize=(8, 6))
+    sns.boxplot(x='label', y='minutiae_count', data=data)
+    plt.title("Box Plot of Minutiae Count by Blood Group")
+    plt.xlabel("Blood Group")
+    plt.ylabel("Minutiae Count")
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+else:
+    print("Warning: 'minutiae_count' column not found in the dataset.")
+
+# Standardize the features for PCA (excluding non-numeric columns)
+drop_columns = ['label', 'label_encoded']
+X = data.drop(columns=[col for col in drop_columns if col in data.columns], errors='ignore')
+
+# Ensure all features are numeric before scaling
+X = X.select_dtypes(include=[np.number])
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# PCA Transformation (reduce to 2 components)
+pca = PCA(n_components=2)
+X_pca = pca.fit_transform(X_scaled)
+
+# Target variable
+y = data['label_encoded']
+
+# Train a RandomForest classifier on PCA-reduced data
+clf = RandomForestClassifier(random_state=42)
+clf.fit(X_pca, y)
+
+# Predicting on the same dataset for evaluation
+y_pred = clf.predict(X_pca)
+
+# Evaluate accuracy
+accuracy = accuracy_score(y, y_pred)
+print(f"Model Accuracy: {accuracy:.2f}")
+
+# Save the trained model
+joblib.dump(clf, 'random_forest_model.pkl')
+
+# Save the processed dataset
+data.to_csv('final_processed_data.csv', index=False)
+
+print("Processing and model training completed successfully.")
+
+
+
+
+
+
+
+
+eda 9-2 next
+
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pickle
+import joblib
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
+
+# Load the cleaned features
+with open('cleaned_fingerprint_features.pkl', 'rb') as f:
+    cleaned_features = pickle.load(f)
+
+# Convert to a DataFrame for analysis
+data = pd.DataFrame(cleaned_features)
+
+# Check for missing values
+print("Missing values in each column:")
+print(data.isnull().sum())
+
+# Fill missing values for numeric columns only
+numeric_columns = data.select_dtypes(include=[np.number]).columns
+data[numeric_columns] = data[numeric_columns].fillna(data[numeric_columns].mean())
+
+# Handle non-numeric columns like 'label'
+categorical_columns = data.select_dtypes(exclude=[np.number]).columns
+for col in categorical_columns:
+    data[col] = data[col].fillna(data[col].mode()[0])
+
+# Overview of the dataset
+print(data.info())
+print(data.describe())
+
+# Ensure the 'label' column exists
+if 'label' not in data.columns:
+    raise ValueError("The 'label' column is missing in the dataset.")
+
+# Class distribution
+plt.figure(figsize=(6, 4))
+sns.countplot(x='label', data=data)
+plt.title('Class Distribution')
+plt.show()
+
+# Encode the 'label' column
+label_encoder = LabelEncoder()
+data['label_encoded'] = label_encoder.fit_transform(data['label'])
+
+# Correlation analysis
+numeric_data = data.select_dtypes(include=[np.number]).copy()
+correlation_matrix = numeric_data.corr()
+
+plt.figure(figsize=(10, 8))
+sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt=".2f")
+plt.title('Feature Correlation Matrix')
+plt.show()
+
+# Handle 'lbp' feature correctly
+lbp_columns = [col for col in data.columns if 'lbp' in col.lower()]
+if lbp_columns:
+    for col in lbp_columns:
+        plt.figure(figsize=(8, 6))
+        sns.histplot(data[col].fillna(0), kde=True, bins=30)
+        plt.title(f'Distribution of {col}')
+        plt.show()
+else:
+    print("Warning: No LBP column found in the dataset.")
+
+# Boxplot of 'minutiae_count' per Blood Group
+if 'minutiae_count' in data.columns:
+    plt.figure(figsize=(8, 6))
+    sns.boxplot(x='label', y='minutiae_count', data=data)
+    plt.title("Box Plot of Minutiae Count by Blood Group")
+    plt.xlabel("Blood Group")
+    plt.ylabel("Minutiae Count")
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+else:
+    print("Warning: 'minutiae_count' column not found in the dataset.")
+
+# Standardize the features for PCA (excluding non-numeric columns)
+drop_columns = ['label', 'label_encoded']
+X = data.drop(columns=[col for col in drop_columns if col in data.columns], errors='ignore')
+
+# Ensure all features are numeric before scaling
+X = X.select_dtypes(include=[np.number])
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Choose the number of PCA components dynamically based on variance
+pca = PCA(n_components=0.95)  # Retains 95% variance
+X_pca = pca.fit_transform(X_scaled)
+
+# Split data into training and test sets
+y = data['label_encoded']
+X_train, X_test, y_train, y_test = train_test_split(X_pca, y, test_size=0.2, random_state=42)
+
+# Train a RandomForest classifier on PCA-reduced data
+clf = RandomForestClassifier(random_state=42)
+clf.fit(X_train, y_train)
+
+# Predicting on test data
+y_pred = clf.predict(X_test)
+
+# Evaluate accuracy
+accuracy = accuracy_score(y_test, y_pred)
+print(f"Model Accuracy on Test Data: {accuracy:.2f}")
+
+# Save the trained model
+joblib.dump(clf, 'random_forest_model.pkl')
+
+# Save the processed dataset
+data.to_csv('final_processed_data.csv', index=False)
+
+print("Processing and model training completed successfully.")
+
+
